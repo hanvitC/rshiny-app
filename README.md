@@ -50,8 +50,10 @@ shiny::runApp("app.R")
 
 ## Collaborators
 
-- [Your Name](https://github.com/yourusername)
-- [Collaborator Name](https://github.com/collaboratorusername)
+- [Han Choi](https://github.com/hanvitC)
+- [Kashish Kumar]()
+- [Jimin Park]()
+- [Shenghong Wu]()
 
 ## Acknowledgments
 
