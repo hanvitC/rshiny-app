@@ -18,13 +18,15 @@ This is an R Shiny application developed for the STAT 4243 Project 2 Assignment.
 - Duplicate Removal
 - Outlier Handling
 - Data Type Conversion
--Text Cleaning
--Scaling
--Categorical Encoding
+- Text Cleaning
+- Scaling
+- Categorical Encoding
 
 ### 3. Feature Engineering
-
--
+- Log Transformation
+- Polynomial Feature
+- Interaction Term
+- Binning
 
 ### 4. EDA
 
@@ -57,7 +59,7 @@ shiny::runApp("app.R")
 
 - [Han Choi](https://github.com/hanvitC)
 - [Kashish Kumar]()
-- [Jimin Park]()
+- [Jimin Park](https://github.com/jp4632)
 - [Shenghong Wu]()
 
 ## Acknowledgments
