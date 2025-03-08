@@ -27,6 +27,7 @@ This is an R Shiny application developed for the STAT 4243 Project 2 Assignment.
 - Polynomial Feature
 - Interaction Term
 - Binning
+- Custom Transformation 
 
 ### 4. EDA
 
