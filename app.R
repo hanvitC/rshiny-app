@@ -250,6 +250,7 @@ ui <- navbarPage(
                downloadButton("download_test", "Download Test Set"),
                hr(),
                h4("Modeling Options"),
+               h5("Note that categorical variables must be encoded."),
                radioButtons("model_type", "Select Model Type",
                             choices = c("Linear Regression", "Logistic Regression", "Random Forest", "Gradient Boosting"),
                             selected = "Linear Regression"),
