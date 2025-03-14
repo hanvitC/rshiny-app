@@ -1,5 +1,7 @@
 # Capytool
 
+Web access at: https://1s4aja-kashish-kumar.shinyapps.io/rshiny-app/
+
 ## Overview
 - Capytool is an advanced R Shiny application developed for the STAT 4243 Project 2 Assignment.
 - The app provides interactive data processing, visualization, and modeling tools, guiding users through every step from data upload to predictive modeling.
