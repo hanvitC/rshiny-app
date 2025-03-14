@@ -15,8 +15,7 @@ library(zip)
 library(webshot)
 library(reshape2)
 
-# Suppress Shiny errors and messages and uplaod size limit
-# Have PhantomJS installed---webshot requires it
+# Suppress Shiny errors and messages and upload size limit
 options(shiny.suppressErrors = TRUE)
 options(shiny.suppressMessages = TRUE)
 options(shiny.maxRequestSize = Inf)
@@ -44,7 +43,7 @@ ui <- navbarPage(
                  h2("Welcome to Capytool!"),
                  p("Capytool is an advanced data processing and analysis tool that lets you:"),
                  tags$ul(
-                   tags$li("Upload datasets (CSV, Excel, JSON, RDS) or use built-in examples"),
+                   tags$li("Upload datasets (CSV, Excel, JSON, RDS)"),
                    tags$li("Clean and preprocess data interactively – including imputation (median for numeric, mode for categorical), duplicate removal, outlier handling, type conversion, scaling, encoding, and text cleaning"),
                    tags$li("Engineer new features using methods such as log transformation, polynomial features, interaction terms (single or multi‑column), binning, and custom mathematical transformations"),
                    tags$li("Explore data with interactive visualizations – scatter plots, histograms (multiple side‑by‑side), box plots, pair plots, PCA (with grouping), correlation heatmaps, cluster plots, and violin plots"),
@@ -59,20 +58,8 @@ ui <- navbarPage(
   tabPanel("Preprocessing",
            sidebarLayout(
              sidebarPanel(
-               # Data source selection: upload or built-in sample dataset
-               radioButtons("data_source", "Data Source",
-                            choices = c("Upload" = "upload", "Built-In" = "builtin"),
-                            selected = "upload"),
-               conditionalPanel(
-                 condition = "input.data_source == 'builtin'",
-                 selectInput("builtin_dataset", "Select Sample Dataset", 
-                             choices = list.files("datasets", pattern = "\\.(csv|xlsx|json|rds)$", full.names = FALSE))
-               ),
-               conditionalPanel(
-                 condition = "input.data_source == 'upload'",
-                 fileInput("files", "Upload Dataset(s)", 
-                           accept = c(".csv", ".xlsx", ".json", ".rds"), multiple = TRUE)
-               ),
+               fileInput("files", "Upload Dataset(s)", 
+                         accept = c(".csv", ".xlsx", ".json", ".rds"), multiple = TRUE),
                uiOutput("dataset_selector"),
                uiOutput("column_selector"),
                tags$hr(),
@@ -101,7 +88,7 @@ ui <- navbarPage(
                selectInput("scale_method", "Scaling Method", 
                            choices = c("None", "Standardization (Z-score)", "Normalization (0-1)")),
                h4("Categorical Encoding"),
-               selectInput("encode_method", "Categorical Encoding", 
+               selectInput("encode_method", "Select method", 
                            choices = c("None", "One-Hot Encoding", "Label Encoding")),
                h4("Text Cleaning"),
                checkboxInput("trim_whitespace", "Trim Whitespace", value = FALSE),
@@ -117,6 +104,10 @@ ui <- navbarPage(
                           h4("Dataset Summary"),
                           DTOutput("data_summary"),
                           downloadButton("download_clean", "Download Cleaned Data")
+                 ),
+                 tabPanel("Encoding Key",
+                          h4("Categorical Encoding Key"),
+                          DTOutput("encoding_key")
                  ),
                  tabPanel("Outlier Visualization",
                           h4("Outlier Distribution"),
@@ -215,7 +206,7 @@ ui <- navbarPage(
                  condition = "input.plot_type == 'PCA Plot'",
                  radioButtons("pca_mode", "PCA Mode", choices = c("2D", "3D"), selected = "2D", inline = TRUE),
                  numericInput("pca_components", "Number of PCA Components", value = 2, min = 2),
-                 selectInput("pca_group", "Group by (Optional)", choices = NULL)
+                 selectInput("pca_group", "Group by (Optional Must be Categorical)", choices = NULL)
                ),
                conditionalPanel(
                  condition = "input.plot_type == 'Cluster Plot'",
@@ -225,7 +216,7 @@ ui <- navbarPage(
                ),
                conditionalPanel(
                  condition = "input.plot_type == 'Violin Plot for Clusters'",
-                 selectInput("violin_group", "Select Grouping Variable", choices = NULL),
+                 selectInput("violin_group", "Select Grouping Variable (Must be categorical)", choices = NULL),
                  selectInput("violin_value", "Select Value Variable", choices = NULL)
                )
              ),
@@ -299,87 +290,67 @@ server <- function(input, output, session) {
     return(df)
   }
   
-  # ---- Data Upload & Preprocessing ----
-  # New reactive for built‐in dataset
-builtin_dataset <- reactive({
-  req(input$builtin_dataset)
-  filepath <- file.path("datasets", input$builtin_dataset)
-  ext <- tools::file_ext(input$builtin_dataset)
-  data <- switch(ext,
-                 csv = read_csv(filepath, col_types = cols(), guess_max = 1000),
-                 xlsx = read_excel(filepath),
-                 json = {
-                   json_lines <- readLines(filepath)
-                   json_data <- lapply(json_lines, jsonlite::fromJSON)
-                   do.call(rbind, lapply(json_data, as.data.frame))
-                 },
-                 rds = readRDS(filepath),
-                 NULL)
-  if (!is.null(data)) {
-    clean_colnames(as.data.frame(data))
-  }
-})
-
-# Modified datasets reactive
-datasets <- reactive({
-  if (input$data_source == "builtin") {
-    # When using built‑in dataset, return a list with one element.
-    list(sample = builtin_dataset())
-  } else {
+  # Reactive to load uploaded datasets
+  datasets <- reactive({
     req(input$files)
     files <- input$files
     result <- list()
     for (i in seq_along(files$name)) {
-      ext <- tools::file_ext(files$name[i])
+      ext <- tolower(tools::file_ext(files$name[i]))
       path <- files$datapath[i]
       data <- switch(ext,
-                     csv = read_csv(path, col_types = cols(), guess_max = 1000),
-                     xlsx = read_excel(path),
-                     json = {
-                       json_lines <- readLines(path)
+                     csv = tryCatch({
+                       read_csv(path, col_types = cols(), guess_max = 1000)
+                     }, error = function(e) {
+                       showNotification(paste("CSV error in", files$name[i], ":", e$message), type = "error")
+                       NULL
+                     }),
+                     xlsx = tryCatch({
+                       read_excel(path)
+                     }, error = function(e) {
+                       showNotification(paste("Excel error in", files$name[i], ":", e$message), type = "error")
+                       NULL
+                     }),
+                     json = tryCatch({
+                       json_lines <- readLines(path, warn = FALSE)
                        json_data <- lapply(json_lines, jsonlite::fromJSON)
                        do.call(rbind, lapply(json_data, as.data.frame))
-                     },
-                     rds = readRDS(path),
-                     NULL)
+                     }, error = function(e) {
+                       showNotification(paste("JSON error in", files$name[i], ":", e$message), type = "error")
+                       NULL
+                     }),
+                     rds = tryCatch({
+                       readRDS(path)
+                     }, error = function(e) {
+                       showNotification(paste("RDS error in", files$name[i], ":", e$message), type = "error")
+                       NULL
+                     }),
+                     NULL
+      )
       if (!is.null(data)) {
         result[[files$name[i]]] <- clean_colnames(as.data.frame(data))
       }
     }
     result
-  }
-})
-# UI for dataset selector and column selector
+  })
+  
+  # UI for dataset selector and column selector
   output$dataset_selector <- renderUI({
-    if (input$data_source == "upload") {
-      req(datasets())
-      selectInput("selected_dataset", "Select Dataset", choices = names(datasets()))
-    } else {
-      h4("Using built-in dataset: sample")
-    }
+    req(datasets())
+    selectInput("selected_dataset", "Select Dataset", choices = names(datasets()))
   })
   
   output$column_selector <- renderUI({
-    if (input$data_source == "upload") {
-      req(datasets(), input$selected_dataset)
-      checkboxGroupInput("selected_columns", "Select Columns", 
-                         choices = names(datasets()[[input$selected_dataset]]),
-                         selected = names(datasets()[[input$selected_dataset]]))
-    } else {
-      req(datasets())
-      checkboxGroupInput("selected_columns", "Select Columns", 
-                         choices = names(datasets()[["sample"]]),
-                         selected = names(datasets()[["sample"]]))
-    }
+    req(datasets(), input$selected_dataset)
+    checkboxGroupInput("selected_columns", "Select Columns and Process them Dynamically", 
+                       choices = names(datasets()[[input$selected_dataset]]),
+                       selected = names(datasets()[[input$selected_dataset]]))
   })
   
+  # Reactive for cleaned data with encoding key generation
   cleaned_data <- reactive({
-    req(datasets(), input$data_source)
-    df <- if (input$data_source == "upload") {
-      datasets()[[input$selected_dataset]]
-    } else {
-      datasets()[["sample"]]
-    }
+    req(datasets(), input$selected_dataset)
+    df <- datasets()[[input$selected_dataset]]
     if (!is.null(input$selected_columns)) {
       df <- df[, input$selected_columns, drop = FALSE]
     }
@@ -431,11 +402,38 @@ datasets <- reactive({
       df <- df %>% mutate(across(where(is.numeric), ~ (. - min(.)) / (max(.) - min(.))))
     }
     
+    # Capture original column names before encoding
+    orig_cols <- names(df)
+    
     if (input$encode_method == "One-Hot Encoding") {
       df <- as.data.frame(model.matrix(~ . - 1, data = df))
+      encoded_cols <- colnames(df)
+      key_df <- data.frame(Original = orig_cols, Encoded = NA, stringsAsFactors = FALSE)
+      key_df$Encoded <- sapply(orig_cols, function(col) {
+        paste(encoded_cols[grepl(paste0("^", col), encoded_cols)], collapse = ", ")
+      })
+      output$encoding_key <- renderDT({
+        datatable(key_df, options = list(pageLength = 10, scrollX = TRUE))
+      })
     } else if (input$encode_method == "Label Encoding") {
-      df <- df %>% mutate(across(where(is.character), as.factor)) %>%
-        mutate(across(where(is.factor), as.numeric))
+      # For label encoding, generate a key for columns that are character
+      key_df <- data.frame(Original = orig_cols, Encoding = NA, stringsAsFactors = FALSE)
+      for (col in orig_cols) {
+        if (is.character(datasets()[[input$selected_dataset]][[col]])) {
+          lvls <- sort(unique(datasets()[[input$selected_dataset]][[col]]))
+          key_df[key_df$Original == col, "Encoding"] <- paste("Levels:", paste(lvls, collapse = ", "))
+        } else {
+          key_df[key_df$Original == col, "Encoding"] <- "Not Encoded"
+        }
+      }
+      df <- df %>% mutate(across(where(is.character), as.factor)) %>% mutate(across(where(is.factor), as.numeric))
+      output$encoding_key <- renderDT({
+        datatable(key_df, options = list(pageLength = 10, scrollX = TRUE))
+      })
+    } else {
+      output$encoding_key <- renderDT({
+        datatable(data.frame(Message = "No encoding applied"), options = list(pageLength = 10, scrollX = TRUE))
+      })
     }
     
     if (input$trim_whitespace) {
@@ -455,20 +453,17 @@ datasets <- reactive({
     datatable(cleaned_data(), options = list(pageLength = 10, scrollX = TRUE))
   })
   
-  # Use a DT table for the dataset summary (instead of verbatim text)
   dataset_summary <- reactive({
     req(cleaned_data())
     df <- cleaned_data()
     stat_list <- lapply(names(df), function(col) {
       if (is.numeric(df[[col]])) {
-        s <- summary(df[[col]])
-        as.character(s)
+        as.character(summary(df[[col]]))
       } else {
         c("Categorical", rep("", 5))
       }
     })
-    stat_df <- do.call(rbind, stat_list)
-    stat_df <- as.data.frame(stat_df, stringsAsFactors = FALSE)
+    stat_df <- as.data.frame(do.call(rbind, stat_list), stringsAsFactors = FALSE)
     stat_df <- cbind(Variable = names(df), stat_df)
     colnames(stat_df)[-1] <- c("Min", "1st Qu", "Median", "Mean", "3rd Qu", "Max")
     stat_df
@@ -828,14 +823,12 @@ datasets <- reactive({
     df <- cleaned_data()[, input$eda_columns, drop = FALSE]
     stat_list <- lapply(names(df), function(col) {
       if (is.numeric(df[[col]])) {
-        s <- summary(df[[col]])
-        as.character(s)
+        as.character(summary(df[[col]]))
       } else {
         c("Categorical", rep("", 5))
       }
     })
-    stat_df <- do.call(rbind, stat_list)
-    stat_df <- as.data.frame(stat_df, stringsAsFactors = FALSE)
+    stat_df <- as.data.frame(do.call(rbind, stat_list), stringsAsFactors = FALSE)
     stat_df <- cbind(Variable = names(df), stat_df)
     colnames(stat_df)[-1] <- c("Min.", "1st Qu.", "Median", "Mean", "3rd Qu.", "Max.")
     datatable(stat_df, options = list(pageLength = 10, scrollX = TRUE))
@@ -847,14 +840,12 @@ datasets <- reactive({
       df <- cleaned_data()[, input$eda_columns, drop = FALSE]
       stat_list <- lapply(names(df), function(col) {
         if (is.numeric(df[[col]])) {
-          s <- summary(df[[col]])
-          as.character(s)
+          as.character(summary(df[[col]]))
         } else {
           c("Categorical", rep("", 5))
         }
       })
-      stat_df <- do.call(rbind, stat_list)
-      stat_df <- as.data.frame(stat_df, stringsAsFactors = FALSE)
+      stat_df <- as.data.frame(do.call(rbind, stat_list), stringsAsFactors = FALSE)
       stat_df <- cbind(Variable = names(df), stat_df)
       colnames(stat_df)[-1] <- c("Min.", "1st Qu.", "Median", "Mean", "3rd Qu.", "Max.")
       write.csv(stat_df, file, row.names = FALSE)
