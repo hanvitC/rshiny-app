@@ -11,19 +11,16 @@ library(shinycssloaders)
 library(caret)
 library(randomForest)
 library(gbm)
-library(zip)       # for zipping files
-library(webshot)   # to capture widget screenshots
-library(reshape2)  # for melting
+library(zip)
+library(webshot)
+library(reshape2)
 
-# Suppress Shiny errors and messages
+# Suppress Shiny errors and messages and uplaod size limit
+# Have PhantomJS installed---webshot requires it
 options(shiny.suppressErrors = TRUE)
 options(shiny.suppressMessages = TRUE)
-
-# Ensure phantomjs is installed (run webshot::install_phantomjs() once)
-# Increase file upload size limit
 options(shiny.maxRequestSize = Inf)
 
-# Custom CSS
 customCSS <- "
   body { background-color: #f7f7f7; }
   .navbar { background-color: #2c3e50 !important; }
@@ -35,7 +32,6 @@ customCSS <- "
   .shiny-input-container { margin-bottom: 10px; }
 "
 
-# UI
 ui <- navbarPage(
   title = "Capytool",
   theme = shinytheme("flatly"),
@@ -59,12 +55,24 @@ ui <- navbarPage(
            )
   ),
   
-  # Preprocessing Tab (unchanged)
+  # Preprocessing Tab
   tabPanel("Preprocessing",
            sidebarLayout(
              sidebarPanel(
-               fileInput("files", "Upload Dataset(s)", 
-                         accept = c(".csv", ".xlsx", ".json", ".rds"), multiple = TRUE),
+               # Data source selection: upload or built-in sample dataset
+               radioButtons("data_source", "Data Source",
+                            choices = c("Upload" = "upload", "Built-In" = "builtin"),
+                            selected = "upload"),
+               conditionalPanel(
+                 condition = "input.data_source == 'builtin'",
+                 selectInput("builtin_dataset", "Select Sample Dataset", 
+                             choices = list.files("datasets", pattern = "\\.(csv|xlsx|json|rds)$", full.names = FALSE))
+               ),
+               conditionalPanel(
+                 condition = "input.data_source == 'upload'",
+                 fileInput("files", "Upload Dataset(s)", 
+                           accept = c(".csv", ".xlsx", ".json", ".rds"), multiple = TRUE)
+               ),
                uiOutput("dataset_selector"),
                uiOutput("column_selector"),
                tags$hr(),
@@ -78,6 +86,14 @@ ui <- navbarPage(
                h4("Outlier Handling"),
                selectInput("outlier_method", "Detect Outliers Using", 
                            choices = c("None", "Z-score", "IQR")),
+               conditionalPanel(
+                 condition = "input.outlier_method == 'Z-score'",
+                 sliderInput("zscore_cutoff", "Z-score Cutoff", min = 1, max = 5, value = 3, step = 0.1)
+               ),
+               conditionalPanel(
+                 condition = "input.outlier_method == 'IQR'",
+                 sliderInput("iqr_cutoff", "IQR Cutoff (Multiplier)", min = 1, max = 3, value = 1.5, step = 0.1)
+               ),
                checkboxInput("remove_outliers", "Remove Outliers", value = FALSE),
                h4("Data Type Conversion & Scaling"),
                selectInput("convert_type", "Convert Data Type", 
@@ -99,15 +115,19 @@ ui <- navbarPage(
                           h4("Dataset Preview"),
                           DTOutput("preview") %>% withSpinner(color="#0dc5c1"),
                           h4("Dataset Summary"),
-                          verbatimTextOutput("summary"),
+                          DTOutput("data_summary"),
                           downloadButton("download_clean", "Download Cleaned Data")
+                 ),
+                 tabPanel("Outlier Visualization",
+                          h4("Outlier Distribution"),
+                          plotlyOutput("outlier_plot", height = "500px")
                  )
                )
              )
            )
   ),
   
-  # Feature Engineering Tab (unchanged)
+  # Feature Engineering Tab
   tabPanel("Feature Engineering",
            sidebarLayout(
              sidebarPanel(
@@ -152,7 +172,7 @@ ui <- navbarPage(
                           h4("Engineered Data Preview"),
                           DTOutput("engineered_preview") %>% withSpinner(color="#0dc5c1"),
                           h4("Engineered Data Summary"),
-                          verbatimTextOutput("engineered_summary"),
+                          DTOutput("engineered_summary_dt"),
                           downloadButton("download_fe", "Download Engineered Data")
                  ),
                  tabPanel("Custom Transformation Plot",
@@ -219,7 +239,6 @@ ui <- navbarPage(
                             DTOutput("brushed_points"),
                             downloadButton("download_brushed", "Download Lasso Points")
                           ),
-                          # For PCA, show PCA components table immediately below the plot
                           conditionalPanel(
                             condition = "input.plot_type == 'PCA Plot'",
                             h4("PCA Components Table"),
@@ -271,18 +290,42 @@ ui <- navbarPage(
   )
 )
 
-# Server
 server <- function(input, output, session) {
   
-  # Helper: clean column names
+  # Helper function to clean column names
   clean_colnames <- function(df) {
     colnames(df) <- gsub("[^[:alnum:]_]", "_", colnames(df))
     colnames(df) <- tolower(colnames(df))
     return(df)
   }
   
-  # Reactive: read uploaded datasets
-  datasets <- reactive({
+  # ---- Data Upload & Preprocessing ----
+  # New reactive for built‐in dataset
+builtin_dataset <- reactive({
+  req(input$builtin_dataset)
+  filepath <- file.path("datasets", input$builtin_dataset)
+  ext <- tools::file_ext(input$builtin_dataset)
+  data <- switch(ext,
+                 csv = read_csv(filepath, col_types = cols(), guess_max = 1000),
+                 xlsx = read_excel(filepath),
+                 json = {
+                   json_lines <- readLines(filepath)
+                   json_data <- lapply(json_lines, jsonlite::fromJSON)
+                   do.call(rbind, lapply(json_data, as.data.frame))
+                 },
+                 rds = readRDS(filepath),
+                 NULL)
+  if (!is.null(data)) {
+    clean_colnames(as.data.frame(data))
+  }
+})
+
+# Modified datasets reactive
+datasets <- reactive({
+  if (input$data_source == "builtin") {
+    # When using built‑in dataset, return a list with one element.
+    list(sample = builtin_dataset())
+  } else {
     req(input$files)
     files <- input$files
     result <- list()
@@ -303,27 +346,40 @@ server <- function(input, output, session) {
         result[[files$name[i]]] <- clean_colnames(as.data.frame(data))
       }
     }
-    return(result)
-  })
-  
-  # UI: dataset selector
+    result
+  }
+})
+# UI for dataset selector and column selector
   output$dataset_selector <- renderUI({
-    req(datasets())
-    selectInput("selected_dataset", "Select Dataset", choices = names(datasets()))
+    if (input$data_source == "upload") {
+      req(datasets())
+      selectInput("selected_dataset", "Select Dataset", choices = names(datasets()))
+    } else {
+      h4("Using built-in dataset: sample")
+    }
   })
   
-  # UI: column selector for preprocessing
   output$column_selector <- renderUI({
-    req(datasets(), input$selected_dataset)
-    checkboxGroupInput("selected_columns", "Select Columns", 
-                       choices = names(datasets()[[input$selected_dataset]]),
-                       selected = names(datasets()[[input$selected_dataset]]))
+    if (input$data_source == "upload") {
+      req(datasets(), input$selected_dataset)
+      checkboxGroupInput("selected_columns", "Select Columns", 
+                         choices = names(datasets()[[input$selected_dataset]]),
+                         selected = names(datasets()[[input$selected_dataset]]))
+    } else {
+      req(datasets())
+      checkboxGroupInput("selected_columns", "Select Columns", 
+                         choices = names(datasets()[["sample"]]),
+                         selected = names(datasets()[["sample"]]))
+    }
   })
   
-  # Reactive: perform data cleaning/preprocessing
   cleaned_data <- reactive({
-    req(datasets(), input$selected_dataset)
-    df <- datasets()[[input$selected_dataset]]
+    req(datasets(), input$data_source)
+    df <- if (input$data_source == "upload") {
+      datasets()[[input$selected_dataset]]
+    } else {
+      datasets()[["sample"]]
+    }
     if (!is.null(input$selected_columns)) {
       df <- df[, input$selected_columns, drop = FALSE]
     }
@@ -334,7 +390,6 @@ server <- function(input, output, session) {
       df <- distinct(df)
     }
     
-    # Missing value imputation
     if (input$impute_method == "Median (numeric)/Mode (categorical)") {
       for (col in names(df)) {
         if (is.numeric(df[[col]])) {
@@ -346,24 +401,22 @@ server <- function(input, output, session) {
       }
     }
     
-    # Outlier handling
     if (input$outlier_method != "None") {
       numeric_cols <- df %>% select(where(is.numeric))
       if (input$outlier_method == "Z-score") {
         z_scores <- scale(numeric_cols)
-        outliers <- abs(z_scores) > 3
+        outliers <- abs(z_scores) > input$zscore_cutoff
       } else if (input$outlier_method == "IQR") {
         Q1 <- apply(numeric_cols, 2, quantile, 0.25, na.rm = TRUE)
         Q3 <- apply(numeric_cols, 2, quantile, 0.75, na.rm = TRUE)
         IQR <- Q3 - Q1
-        outliers <- (numeric_cols < (Q1 - 1.5 * IQR)) | (numeric_cols > (Q3 + 1.5 * IQR))
+        outliers <- (numeric_cols < (Q1 - input$iqr_cutoff * IQR)) | (numeric_cols > (Q3 + input$iqr_cutoff * IQR))
       }
       if (input$remove_outliers) {
         df <- df[!apply(outliers, 1, any), ]
       }
     }
     
-    # Data type conversion
     if (input$convert_type == "To Character") {
       df <- df %>% mutate(across(where(is.numeric), as.character))
     } else if (input$convert_type == "To Numeric") {
@@ -372,14 +425,12 @@ server <- function(input, output, session) {
       df <- df %>% mutate(across(where(is.character), as.Date))
     }
     
-    # Scaling
     if (input$scale_method == "Standardization (Z-score)") {
       df <- df %>% mutate(across(where(is.numeric), scale))
     } else if (input$scale_method == "Normalization (0-1)") {
       df <- df %>% mutate(across(where(is.numeric), ~ (. - min(.)) / (max(.) - min(.))))
     }
     
-    # Categorical encoding
     if (input$encode_method == "One-Hot Encoding") {
       df <- as.data.frame(model.matrix(~ . - 1, data = df))
     } else if (input$encode_method == "Label Encoding") {
@@ -387,7 +438,6 @@ server <- function(input, output, session) {
         mutate(across(where(is.factor), as.numeric))
     }
     
-    # Text cleaning
     if (input$trim_whitespace) {
       df <- df %>% mutate(across(where(is.character), trimws))
     }
@@ -405,9 +455,34 @@ server <- function(input, output, session) {
     datatable(cleaned_data(), options = list(pageLength = 10, scrollX = TRUE))
   })
   
-  output$summary <- renderPrint({
+  # Use a DT table for the dataset summary (instead of verbatim text)
+  dataset_summary <- reactive({
     req(cleaned_data())
-    summary(cleaned_data())
+    df <- cleaned_data()
+    stat_list <- lapply(names(df), function(col) {
+      if (is.numeric(df[[col]])) {
+        s <- summary(df[[col]])
+        as.character(s)
+      } else {
+        c("Categorical", rep("", 5))
+      }
+    })
+    stat_df <- do.call(rbind, stat_list)
+    stat_df <- as.data.frame(stat_df, stringsAsFactors = FALSE)
+    stat_df <- cbind(Variable = names(df), stat_df)
+    colnames(stat_df)[-1] <- c("Min", "1st Qu", "Median", "Mean", "3rd Qu", "Max")
+    stat_df
+  })
+  
+  output$data_summary <- renderDT({
+    datatable(dataset_summary(),
+              options = list(pageLength = 10, scrollX = TRUE, filter = 'top',
+                             initComplete = JS(
+                               "function(settings, json) {",
+                               "$(this.api().table().header()).css({'background-color': '#2c3e50', 'color': '#fff'});",
+                               "}"
+                             )
+              ))
   })
   
   output$download_clean <- downloadHandler(
@@ -417,7 +492,27 @@ server <- function(input, output, session) {
     }
   )
   
-  # --- Feature Engineering UI Elements ---
+  output$outlier_plot <- renderPlotly({
+    req(cleaned_data())
+    df <- cleaned_data()
+    numeric_cols <- df %>% select(where(is.numeric))
+    if (input$outlier_method == "Z-score") {
+      z_scores <- scale(numeric_cols)
+      p <- plot_ly(x = ~z_scores, type = "histogram", name = "Z-scores", marker = list(color = "lightblue"))
+      p <- p %>% layout(title = "Z-score Distribution", xaxis = list(title = "Z-score"), yaxis = list(title = "Count"))
+    } else if (input$outlier_method == "IQR") {
+      Q1 <- apply(numeric_cols, 2, quantile, 0.25, na.rm = TRUE)
+      Q3 <- apply(numeric_cols, 2, quantile, 0.75, na.rm = TRUE)
+      IQR <- Q3 - Q1
+      p <- plot_ly(x = ~IQR, type = "box", name = "IQR", marker = list(color = "lightgreen"))
+      p <- p %>% layout(title = "IQR Distribution", xaxis = list(title = "IQR"), yaxis = list(title = "Count"))
+    } else {
+      p <- plot_ly(x = ~unlist(numeric_cols), type = "histogram", name = "Data Distribution", marker = list(color = "lightblue"))
+      p <- p %>% layout(title = "Data Distribution", xaxis = list(title = "Value"), yaxis = list(title = "Count"))
+    }
+    p
+  })
+  
   observe({
     req(cleaned_data())
     numeric_vars <- names(cleaned_data()[, sapply(cleaned_data(), is.numeric), drop = FALSE])
@@ -430,7 +525,6 @@ server <- function(input, output, session) {
     updateSelectizeInput(session, "custom_cols", choices = numeric_vars, server = TRUE)
   })
   
-  # --- EDA UI Updates ---
   observe({
     req(cleaned_data())
     all_cols <- names(cleaned_data())
@@ -449,24 +543,19 @@ server <- function(input, output, session) {
   
   observe({
     req(cleaned_data(), input$eda_columns)
-    # Update scatter plot axes and histogram/box plot choices based on numeric subset of eda_columns
     eda_numeric <- names(cleaned_data()[, input$eda_columns, drop = FALSE][, sapply(cleaned_data()[, input$eda_columns, drop = FALSE], is.numeric), drop = FALSE])
     updateSelectInput(session, "scatter_x", choices = eda_numeric)
     updateSelectInput(session, "scatter_y", choices = eda_numeric)
     updateSelectizeInput(session, "hist_cols", choices = eda_numeric, server = TRUE)
     updateSelectizeInput(session, "box_cols", choices = eda_numeric, server = TRUE)
-    # For PCA grouping, update choices from categorical columns
     cat_cols <- names(cleaned_data())[sapply(cleaned_data(), function(x) is.factor(x) || is.character(x))]
     updateSelectInput(session, "pca_group", choices = c("None", cat_cols), selected = "None")
-    # For cluster plot, update inputs for cluster_x and cluster_y
     updateSelectInput(session, "cluster_x", choices = eda_numeric)
     updateSelectInput(session, "cluster_y", choices = eda_numeric)
-    # For violin plot, update grouping (categorical) and value (numeric)
     updateSelectInput(session, "violin_group", choices = cat_cols)
     updateSelectInput(session, "violin_value", choices = eda_numeric)
   })
   
-  # --- Modeling UI Updates ---
   observe({
     req(cleaned_data())
     all_cols <- names(cleaned_data())
@@ -484,7 +573,6 @@ server <- function(input, output, session) {
     }
   })
   
-  # --- Feature Engineering Processing ---
   engineered_data <- eventReactive(input$apply_fe, {
     req(cleaned_data())
     df <- cleaned_data()
@@ -533,9 +621,33 @@ server <- function(input, output, session) {
     datatable(engineered_data(), options = list(pageLength = 10, scrollX = TRUE))
   })
   
-  output$engineered_summary <- renderPrint({
+  engineered_summary_table <- reactive({
     req(engineered_data())
-    summary(engineered_data())
+    df <- engineered_data()
+    stat_list <- lapply(names(df), function(col) {
+      if (is.numeric(df[[col]])) {
+        s <- summary(df[[col]])
+        as.character(s)
+      } else {
+        c("Categorical", rep("", 5))
+      }
+    })
+    stat_df <- do.call(rbind, stat_list)
+    stat_df <- as.data.frame(stat_df, stringsAsFactors = FALSE)
+    stat_df <- cbind(Variable = names(df), stat_df)
+    colnames(stat_df)[-1] <- c("Min", "1st Qu", "Median", "Mean", "3rd Qu", "Max")
+    stat_df
+  })
+  
+  output$engineered_summary_dt <- renderDT({
+    datatable(engineered_summary_table(),
+              options = list(pageLength = 10, scrollX = TRUE, filter = 'top',
+                             initComplete = JS(
+                               "function(settings, json) {",
+                               "$(this.api().table().header()).css({'background-color': '#2c3e50', 'color': '#fff'});",
+                               "}"
+                             )
+              ))
   })
   
   output$download_fe <- downloadHandler(
@@ -555,12 +667,11 @@ server <- function(input, output, session) {
     if (!all(is.na(transformed))) {
       p1 <- plot_ly(x = ~x, type = "histogram", name = col, marker = list(color = "lightblue"), showlegend = TRUE)
       p2 <- plot_ly(x = ~transformed, type = "histogram", name = paste(col, "transformed"), marker = list(color = "lightgreen"), showlegend = TRUE)
-      subplot(p1, p2, nrows = 1, shareX = FALSE, titleX = TRUE) %>%
+      subplot(p1, p2, nrows = 1, shareX = FALSE, titleX = TRUE) %>% 
         layout(title = paste("Custom Transformation for", col))
     }
   })
   
-  # --- Exploratory Data Analysis (EDA) Processing ---
   output$eda_plot <- renderPlotly({
     req(cleaned_data())
     df <- cleaned_data()
@@ -577,20 +688,20 @@ server <- function(input, output, session) {
       overall_title <- paste("Histograms of", paste(input$hist_cols, collapse = ", "))
       plots <- lapply(input$hist_cols, function(col) {
         plot_ly(df, x = ~df[[col]], type = "histogram", name = col, showlegend = TRUE,
-                marker = list(color = sample(colors(), 1))) %>%
+                marker = list(color = sample(colors(), 1))) %>% 
           layout(title = col, xaxis = list(title = col), yaxis = list(title = "Count"))
       })
-      subplot(plots, nrows = ceiling(length(plots)/2), shareX = FALSE) %>%
+      subplot(plots, nrows = ceiling(length(plots)/2), shareX = FALSE) %>% 
         layout(title = overall_title)
     } else if (input$plot_type == "Box Plot") {
       req(input$box_cols)
       overall_title <- paste("Box Plots of", paste(input$box_cols, collapse = ", "))
       plots <- lapply(input$box_cols, function(col) {
         plot_ly(df, y = ~df[[col]], type = "box", name = col, showlegend = TRUE,
-                boxpoints = "all", jitter = 0.3) %>%
+                boxpoints = "all", jitter = 0.3) %>% 
           layout(title = col, yaxis = list(title = col))
       })
-      subplot(plots, nrows = ceiling(length(plots)/2), shareY = FALSE) %>%
+      subplot(plots, nrows = ceiling(length(plots)/2), shareY = FALSE) %>% 
         layout(title = overall_title)
     } else if (input$plot_type == "Pair Plot") {
       req(input$eda_columns)
@@ -620,8 +731,8 @@ server <- function(input, output, session) {
           p <- plot_ly(pca_data, x = ~PC1, y = ~PC2, z = ~PC3, type = "scatter3d", mode = "markers")
         }
         p <- p %>% layout(title = "3D PCA Plot", scene = list(xaxis = list(title = "PC1"),
-                                                                yaxis = list(title = "PC2"),
-                                                                zaxis = list(title = "PC3")))
+                                                              yaxis = list(title = "PC2"),
+                                                              zaxis = list(title = "PC3")))
       } else {
         if (!is.null(input$pca_group) && input$pca_group != "None") {
           p <- plot_ly(pca_data, x = ~PC1, y = ~PC2, color = ~pca_data[[input$pca_group]],
@@ -690,44 +801,31 @@ server <- function(input, output, session) {
     }
   })
   
-  # Getting the brushed points from plotly
   output$brushed_points <- renderDT({
-  # Allow brushing for Scatter Plot and Cluster Plot only
-  if (!(input$plot_type %in% c("Scatter Plot", "Cluster Plot"))) {
-    return(datatable(data.frame(Message = "Brushing is not supported for this plot type.")))
-  }
+    if (!(input$plot_type %in% c("Scatter Plot", "Cluster Plot"))) {
+      return(datatable(data.frame(Message = "Brushing is not supported for this plot type.")))
+    }
+    if (input$plot_type == "Scatter Plot") {
+      source_val <- "scatterPlot"
+      x_var <- input$scatter_x
+      y_var <- input$scatter_y
+    } else if (input$plot_type == "Cluster Plot") {
+      source_val <- "clusterPlot"
+      x_var <- input$cluster_x
+      y_var <- input$cluster_y
+    }
+    brushed <- event_data("plotly_selected", source = source_val)
+    if (is.null(brushed) || nrow(brushed) == 0) {
+      return(datatable(data.frame(Message = "No points selected.")))
+    }
+    df <- cleaned_data()
+    selected <- df %>% filter(get(x_var) %in% brushed$x & get(y_var) %in% brushed$y)
+    datatable(selected, options = list(pageLength = 10, scrollX = TRUE))
+  })
   
-  # Set source and axis variables based on plot type
-  if (input$plot_type == "Scatter Plot") {
-    source_val <- "scatterPlot"
-    x_var <- input$scatter_x
-    y_var <- input$scatter_y
-  } else if (input$plot_type == "Cluster Plot") {
-    source_val <- "clusterPlot"
-    x_var <- input$cluster_x
-    y_var <- input$cluster_y
-  }
-  
-  # Retrieve brushed data using the appropriate source
-  brushed <- event_data("plotly_selected", source = source_val)
-  if (is.null(brushed) || nrow(brushed) == 0) {
-    return(datatable(data.frame(Message = "No points selected.")))
-  }
-  
-  df <- cleaned_data()
-  # Filter rows based on the brushed x and y values
-  selected <- df %>% filter(get(x_var) %in% brushed$x & get(y_var) %in% brushed$y)
-  
-  datatable(selected, options = list(pageLength = 10, scrollX = TRUE))
-})
-
-
-  
-  # --- Updated EDA Descriptive Statistics ---
   output$eda_stats <- renderDT({
     req(input$eda_columns)
     df <- cleaned_data()[, input$eda_columns, drop = FALSE]
-    
     stat_list <- lapply(names(df), function(col) {
       if (is.numeric(df[[col]])) {
         s <- summary(df[[col]])
@@ -736,7 +834,6 @@ server <- function(input, output, session) {
         c("Categorical", rep("", 5))
       }
     })
-    
     stat_df <- do.call(rbind, stat_list)
     stat_df <- as.data.frame(stat_df, stringsAsFactors = FALSE)
     stat_df <- cbind(Variable = names(df), stat_df)
@@ -764,7 +861,6 @@ server <- function(input, output, session) {
     }
   )
   
-  # Download PCA Components Table as CSV (displayed under PCA Plot)
   output$pca_table <- renderDT({
     req(input$eda_columns, input$pca_components)
     df <- cleaned_data()[, input$eda_columns, drop = FALSE]
@@ -789,7 +885,6 @@ server <- function(input, output, session) {
     }
   )
   
-  # --- Modeling UI Updates ---
   observe({
     req(cleaned_data())
     all_cols <- names(cleaned_data())
@@ -807,7 +902,6 @@ server <- function(input, output, session) {
     }
   })
   
-  # --- Modeling: Data Splitting ---
   split_data <- eventReactive(input$split_data, {
     req(cleaned_data(), input$target_col)
     df <- cleaned_data()
@@ -843,7 +937,6 @@ server <- function(input, output, session) {
     }
   )
   
-  # --- Modeling: Run Model ---
   model_result <- eventReactive(input$run_model, {
     req(split_data(), input$target_col)
     df_split <- split_data()

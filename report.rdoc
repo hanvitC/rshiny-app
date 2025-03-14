@@ -1,0 +1,81 @@
+% INTRODUCTION AND OVERVIEW
+%
+% Capytool is designed to address the growing need for interactive data analysis tools in today's
+% data driven world. This application guides users through the entire data workflow starting from
+% dataset upload and cleaning, to feature engineering, exploratory data analysis (EDA), and finally,
+% predictive modeling. The app supports multiple data formats and provides a range of interactive options,
+% including dynamic column selection, advanced cleaning procedures, and interactive visualizations.
+%
+% ============================
+% 
+% DATA ACQUISITION, PREPROCESSING, AND CLEANING
+%
+% Capytool supports the upload of datasets in CSV, Excel, JSON, and RDS formats. Users are given the
+% option to select which columns to process immediately after upload. The preprocessing module performs
+% the following tasks:
+%
+% - Missing Value Handling: Imputes missing numeric values using the median and missing categorical values
+%   using the mode.
+% - Duplicate Removal: Automatically removes duplicate records from the dataset.
+% - Outlier Handling: Detects outliers via either the Zscore method or the IQR method, with an option to remove them.
+% - Data Type Conversion and Scaling: Allows conversion of columns to character, numeric, or date types;
+%   also offers scaling options through standardization (Zscore) or normalization (0 to 1).
+% - Categorical Encoding and Text Cleaning: Supports onehot and label encoding for categorical variables.
+%   In addition, text cleaning features trim extra whitespace, convert text to lowercase, and remove punctuation.
+%
+% The combination of these processes ensures that raw data is transformed into a consistent format ready for
+% feature engineering and subsequent analysis.
+%
+% ============================
+% 
+% FEATURE ENGINEERING
+%
+% The feature engineering module in Capytool offers a variety of transformation techniques to enhance data
+% insight. Users can:
+%
+% - Apply a log transformation to selected numeric columns.
+% - Generate polynomial features such as squared terms to capture nonlinear relationships.
+% - Create interaction terms between two selected variables or generate multi column interactions by taking
+%   the product of several columns.
+% - Perform binning to convert continuous variables into categorical bins.
+% - Apply custom mathematical transformations through userdefined expressions (for example, log(x+1)).
+%
+% These options are implemented interactively, and users can immediately preview the engineered data along with
+% summary statistics to evaluate the impact of the transformation.
+%
+% ============================
+% 
+% EXPLORATORY DATA ANALYSIS (EDA)
+%
+% Capytool provides a comprehensive EDA module that features interactive visualizations and dynamic filtering.
+% Users can generate a variety of plots, including:
+%
+% - Scatter plots with brushing capability (referred to as Lasso Points) for detailed data subset inspection.
+% - Histograms and box plots for comparing distributions of selected columns, with titles and legends that reflect
+%   the actual variable names.
+% - Pair plots (scatterplot matrices) for multivariate exploration.
+% - PCA plots available in both 2D and 3D with grouping options and a downloadable PCA components table.
+% - An interactive correlation heatmap that displays correlation coefficients among selected numeric columns.
+% - Cluster plots and violin plots for clusters to assess group-specific patterns.
+%
+% In addition, descriptive statistics are computed for all selected columns. Numeric variables are summarized with
+% standard statistics (minimum, first quartile, median, mean, third quartile, maximum), and categorical variables are
+% labeled as "Categorical" with blank entries for the numerical summaries. All outputs are downloadable.
+%
+% ============================
+% 
+% MODELING
+%
+% The modeling module allows users to split the dataset into training and test sets using an adjustable ratio.
+% The app supports various modeling techniques, including:
+%
+% - Linear Regression
+% - Logistic Regression
+% - Random Forest
+% - Gradient Boosting
+%
+% Once the model is run, users can view interactive visualizations such as scatter plots comparing predicted versus
+% actual values or histograms of predicted probabilities. The training data preview displays only the target variable
+% and the selected predictors. Both the datasets and the model summary are available for download.
+%
+% ============================
