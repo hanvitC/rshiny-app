@@ -32,6 +32,7 @@ customCSS <- "
 "
 
 ui <- navbarPage(
+  id = "tabs",
   title = "Capytool",
   theme = shinytheme("flatly"),
   header = tags$head(tags$style(HTML(customCSS))),
@@ -50,6 +51,11 @@ ui <- navbarPage(
                    tags$li("Split your data for modeling and run advanced models (Linear Regression, Logistic Regression, Random Forest, Gradient Boosting)")
                  ),
                  p("Use the navigation bar above to work through your data!")
+             ),
+             fluidRow(
+               column(12, align = "left",
+                      actionButton("next_home", "Next")
+               )
              )
            )
   ),
@@ -58,8 +64,10 @@ ui <- navbarPage(
   tabPanel("Preprocessing",
            sidebarLayout(
              sidebarPanel(
+               # Sample Dataset Button and File Upload
                fileInput("files", "Upload Dataset(s)", 
                          accept = c(".csv", ".xlsx", ".json", ".rds"), multiple = TRUE),
+               actionButton("generate_sample", "Generate Sample Dataset"),
                uiOutput("dataset_selector"),
                uiOutput("column_selector"),
                tags$hr(),
@@ -94,7 +102,9 @@ ui <- navbarPage(
                checkboxInput("trim_whitespace", "Trim Whitespace", value = FALSE),
                checkboxInput("to_lowercase", "Convert to Lowercase", value = FALSE),
                checkboxInput("remove_punctuation", "Remove Punctuation", value = FALSE),
-               actionButton("apply_clean", "Apply Preprocessing")
+               actionButton("apply_clean", "Apply Preprocessing"),
+               br(), br(),
+               actionButton("next_preprocessing", "Apply preprocessing and Next")
              ),
              mainPanel(
                tabsetPanel(
@@ -155,7 +165,9 @@ ui <- navbarPage(
                  selectizeInput("custom_cols", "Select Column(s) for Custom Transformation", choices = NULL, multiple = TRUE),
                  textInput("custom_expr", "Enter Transformation Expression (use 'x' as variable)", value = "log(x+1)")
                ),
-               actionButton("apply_fe", "Apply Feature Engineering")
+               actionButton("apply_fe", "Apply Feature Engineering"),
+               br(), br(),
+               actionButton("next_feature", "Next")
              ),
              mainPanel(
                tabsetPanel(
@@ -218,7 +230,9 @@ ui <- navbarPage(
                  condition = "input.plot_type == 'Violin Plot for Clusters'",
                  selectInput("violin_group", "Select Grouping Variable (Must be categorical)", choices = NULL),
                  selectInput("violin_value", "Select Value Variable", choices = NULL)
-               )
+               ),
+               br(), br(),
+               actionButton("next_eda", "Next")
              ),
              mainPanel(
                tabsetPanel(
@@ -290,48 +304,65 @@ server <- function(input, output, session) {
     return(df)
   }
   
-  # Reactive to load uploaded datasets
+  # Reactive to load uploaded datasets or use sample dataset if generated
   datasets <- reactive({
-    req(input$files)
-    files <- input$files
-    result <- list()
-    for (i in seq_along(files$name)) {
-      ext <- tolower(tools::file_ext(files$name[i]))
-      path <- files$datapath[i]
-      data <- switch(ext,
-                     csv = tryCatch({
-                       read_csv(path, col_types = cols(), guess_max = 1000)
-                     }, error = function(e) {
-                       showNotification(paste("CSV error in", files$name[i], ":", e$message), type = "error")
+    if (!is.null(input$files) && nrow(input$files) > 0) {
+      files <- input$files
+      result <- list()
+      for (i in seq_along(files$name)) {
+        ext <- tolower(tools::file_ext(files$name[i]))
+        path <- files$datapath[i]
+        data <- switch(ext,
+                       csv = tryCatch({
+                         read_csv(path, col_types = cols(), guess_max = 1000)
+                       }, error = function(e) {
+                         showNotification(paste("CSV error in", files$name[i], ":", e$message), type = "error")
+                         NULL
+                       }),
+                       xlsx = tryCatch({
+                         read_excel(path)
+                       }, error = function(e) {
+                         showNotification(paste("Excel error in", files$name[i], ":", e$message), type = "error")
+                         NULL
+                       }),
+                       json = tryCatch({
+                         json_lines <- readLines(path, warn = FALSE)
+                         json_data <- lapply(json_lines, jsonlite::fromJSON)
+                         do.call(rbind, lapply(json_data, as.data.frame))
+                       }, error = function(e) {
+                         showNotification(paste("JSON error in", files$name[i], ":", e$message), type = "error")
+                         NULL
+                       }),
+                       rds = tryCatch({
+                         readRDS(path)
+                       }, error = function(e) {
+                         showNotification(paste("RDS error in", files$name[i], ":", e$message), type = "error")
+                         NULL
+                       }),
                        NULL
-                     }),
-                     xlsx = tryCatch({
-                       read_excel(path)
-                     }, error = function(e) {
-                       showNotification(paste("Excel error in", files$name[i], ":", e$message), type = "error")
-                       NULL
-                     }),
-                     json = tryCatch({
-                       json_lines <- readLines(path, warn = FALSE)
-                       json_data <- lapply(json_lines, jsonlite::fromJSON)
-                       do.call(rbind, lapply(json_data, as.data.frame))
-                     }, error = function(e) {
-                       showNotification(paste("JSON error in", files$name[i], ":", e$message), type = "error")
-                       NULL
-                     }),
-                     rds = tryCatch({
-                       readRDS(path)
-                     }, error = function(e) {
-                       showNotification(paste("RDS error in", files$name[i], ":", e$message), type = "error")
-                       NULL
-                     }),
-                     NULL
-      )
-      if (!is.null(data)) {
-        result[[files$name[i]]] <- clean_colnames(as.data.frame(data))
+        )
+        if (!is.null(data)) {
+          result[[files$name[i]]] <- clean_colnames(as.data.frame(data))
+        }
       }
+      return(result)
+    } else if (input$generate_sample > 0) {
+      sample_df <- data.frame(
+        num1 = rnorm(100),
+        num2 = runif(100),
+        num3 = rnorm(100, mean = 50, sd = 10),
+        num4 = rpois(100, lambda = 20),
+        num5 = rnorm(100, mean = 100, sd = 15),
+        cat1 = sample(LETTERS[1:4], 100, replace = TRUE),
+        cat2 = sample(c("A", "B", "C"), 100, replace = TRUE),
+        num6 = rnorm(100, mean = 0, sd = 5),
+        num7 = runif(100, min = -10, max = 10),
+        cat3 = sample(c("X", "Y", "Z"), 100, replace = TRUE)
+      )
+      return(list("Sample Dataset" = sample_df))
+    } else {
+      return(NULL)
     }
-    result
   })
   
   # UI for dataset selector and column selector
@@ -416,7 +447,6 @@ server <- function(input, output, session) {
         datatable(key_df, options = list(pageLength = 10, scrollX = TRUE))
       })
     } else if (input$encode_method == "Label Encoding") {
-      # For label encoding, generate a key for columns that are character
       key_df <- data.frame(Original = orig_cols, Encoding = NA, stringsAsFactors = FALSE)
       for (col in orig_cols) {
         if (is.character(datasets()[[input$selected_dataset]][[col]])) {
@@ -627,8 +657,7 @@ server <- function(input, output, session) {
         c("Categorical", rep("", 5))
       }
     })
-    stat_df <- do.call(rbind, stat_list)
-    stat_df <- as.data.frame(stat_df, stringsAsFactors = FALSE)
+    stat_df <- as.data.frame(do.call(rbind, stat_list), stringsAsFactors = FALSE)
     stat_df <- cbind(Variable = names(df), stat_df)
     colnames(stat_df)[-1] <- c("Min", "1st Qu", "Median", "Mean", "3rd Qu", "Max")
     stat_df
@@ -1022,6 +1051,25 @@ server <- function(input, output, session) {
       sink()
     }
   )
+  
+  # Navigation Observers for Next Buttons in Sidebar Panels
+  
+  observeEvent(input$next_home, {
+    updateNavbarPage(session, "tabs", selected = "Preprocessing")
+  })
+  
+  observeEvent(input$next_preprocessing, {
+    updateNavbarPage(session, "tabs", selected = "Feature Engineering")
+  })
+  
+  observeEvent(input$next_feature, {
+    updateNavbarPage(session, "tabs", selected = "Exploratory Data Analysis")
+  })
+  
+  observeEvent(input$next_eda, {
+    updateNavbarPage(session, "tabs", selected = "Modeling")
+  })
+  
 }
 
 shinyApp(ui = ui, server = server)
